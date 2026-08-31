@@ -1153,48 +1153,48 @@ function createApiApp() {
 
   if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
 
-  // ✅ CORREÇÃO: Lê do .env ou usa o fallback COM o hífen na URL da Vercel
-  const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
-    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()) 
-    : [
+  const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim())
+  : [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
       "https://spectre-auth.vercel.app",
       "https://spectre-auth-git-main-delete-accountz.vercel.app",
       "https://spectre-auth-7mwa068gw-delete-accountz.vercel.app",
       "https://safetyapi-zeta.vercel.app"
-      ];
+    ];
 
-  app.use(
-    cors({
-      origin: function(origin, callback) {
-        // Permite requisições sem origin (como apps mobile ou ferramentas como Postman)
-        if (!origin) return callback(null, true);
-        
-        // Verifica se a origem está na lista permitida
-        if (allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        }
-        
-        return callback(new Error("Not allowed by CORS: " + origin));
-      },
-      credentials: true, // ✅ Essencial para enviar cookies entre domínios diferentes
-      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: [
-        "Content-Type",
-        "Authorization",
-        "x-username",
-        "x-license-key",
-        "x-product-hash",
-        "x-api-token",
-        "x-admin-csrf",
-        "x-censor",
-        "x-csrf-token"
-      ],
-      exposedHeaders: ["x-request-id", "x-censor-enabled"],
-      maxAge: 86400,
-    })
-  );
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Permite requisições sem origin (ex: Postman, apps mobile)
+      if (!origin) return callback(null, true);
+      
+      // Se a origem estiver na lista, permite
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      // CORREÇÃO CRÍTICA: Recusa silenciosamente sem gerar erro 500 no Express
+      return callback(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "x-username",
+      "x-license-key",
+      "x-product-hash",
+      "x-api-token",
+      "x-admin-csrf",
+      "x-censor",
+      "x-csrf-token"
+    ],
+    exposedHeaders: ["x-request-id", "x-censor-enabled"],
+    maxAge: 86400,
+  })
+);
 
   app.disable('x-powered-by');
   app.use(requestContext);
