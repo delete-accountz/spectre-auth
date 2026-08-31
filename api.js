@@ -1156,7 +1156,7 @@ function createApiApp() {
   : [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
-      "https://spectreauth.vercel.app",
+      "https://spectre-auth.vercel.app", // <-- SUA URL REAL DA VERCEL AQUI
       "https://safetyapi-zeta.vercel.app",
     ];
 
