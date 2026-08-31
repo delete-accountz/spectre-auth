@@ -1157,10 +1157,12 @@ function createApiApp() {
   const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
     ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()) 
     : [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://spectre-auth.vercel.app", // <-- HÍFEN CORRIGIDO AQUI
-        "https://safetyapi-zeta.vercel.app"
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "https://spectre-auth.vercel.app",
+      "https://spectre-auth-git-main-delete-accountz.vercel.app",
+      "https://spectre-auth-7mwa068gw-delete-accountz.vercel.app",
+      "https://safetyapi-zeta.vercel.app"
       ];
 
   app.use(
