@@ -1151,37 +1151,46 @@ function makeQueryWritable(req, res, next) {
 function createApiApp() {
   const app = express();
 
+  if (process.env.TRUST_PROXY === '1') app.set('trust proxy', 1);
+
+  // ✅ CORREÇÃO: Lê do .env ou usa o fallback COM o hífen na URL da Vercel
   const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS 
-  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()) 
-  : [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://spectre-auth.vercel.app", 
-    "https://safetyapi-zeta.vercel.app",
-    ];
+    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(s => s.trim()) 
+    : [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://spectre-auth.vercel.app", // <-- HÍFEN CORRIGIDO AQUI
+        "https://safetyapi-zeta.vercel.app"
+      ];
 
   app.use(
     cors({
-      origin(origin, cb) {
-        if (!origin) return cb(null, true);
-        if (allowedOrigins.includes(origin)) return cb(null, true);
-        return cb(new Error("Not allowed by CORS: " + origin));
+      origin: function(origin, callback) {
+        // Permite requisições sem origin (como apps mobile ou ferramentas como Postman)
+        if (!origin) return callback(null, true);
+        
+        // Verifica se a origem está na lista permitida
+        if (allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        
+        return callback(new Error("Not allowed by CORS: " + origin));
       },
-      credentials: true,
+      credentials: true, // ✅ Essencial para enviar cookies entre domínios diferentes
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "x-username",
-    "x-license-key",
-    "x-product-hash",
-    "x-api-token",
-    "x-admin-csrf",
-    "x-censor",
-    "x-csrf-token"
-  ],
-  exposedHeaders: ["x-request-id", "x-censor-enabled"],
-  maxAge: 86400,
+      allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "x-username",
+        "x-license-key",
+        "x-product-hash",
+        "x-api-token",
+        "x-admin-csrf",
+        "x-censor",
+        "x-csrf-token"
+      ],
+      exposedHeaders: ["x-request-id", "x-censor-enabled"],
+      maxAge: 86400,
     })
   );
 
