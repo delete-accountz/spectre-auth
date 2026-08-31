@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.DS_Store
+*.log
+logs/
+dlls/*.dll
+admin/node_modules/
+admin/.next/
+admin/out/
+build.out
