@@ -680,33 +680,22 @@ function audit({ level = 'INFO', event, req, statusCode, message, meta = {} }) {
   else if (level === 'WARN') logger.warn(line);
   else logger.info(line);
 
+  if (!metaSafe.keyRaw && typeof b.licenseKey === 'string') metaSafe.keyRaw = b.licenseKey;
+  if (!metaSafe.discordIdRaw && typeof b.discordId === 'string') metaSafe.discordIdRaw = b.discordId;
+  if (!metaSafe.hwidRaw && typeof b.hwid === 'string') metaSafe.hwidRaw = b.hwid;
+  if (!metaSafe.keyMasked && metaSafe.keyRaw) metaSafe.keyMasked = mask(metaSafe.keyRaw);
+  if (!metaSafe.discordIdMasked && metaSafe.discordIdRaw) metaSafe.discordIdMasked = mask(metaSafe.discordIdRaw, 4, 2);
+  if (!metaSafe.hwidMasked && metaSafe.hwidRaw) metaSafe.hwidMasked = mask(metaSafe.hwidRaw, 6, 4);
+
   if (level !== 'INFO') {
-    const lines = [
-      `\`reqId\`: \`${base.requestId}\``,
-      `\`route\`: \`${base.method} ${base.route}\``,
-      `\`status\`: \`${base.statusCode}\``,
-      `\`ip\`: \`${base.ip}\``,
-      `\`ua\`: \`${base.ua}\``,
-    ];
-
-     if (!metaSafe.keyRaw && typeof b.licenseKey === 'string') metaSafe.keyRaw = b.licenseKey;
-     if (!metaSafe.discordIdRaw && typeof b.discordId === 'string') metaSafe.discordIdRaw = b.discordId;
-     if (!metaSafe.hwidRaw && typeof b.hwid === 'string') metaSafe.hwidRaw = b.hwid;
-     if (!metaSafe.keyMasked && metaSafe.keyRaw) metaSafe.keyMasked = mask(metaSafe.keyRaw);
-     if (!metaSafe.discordIdMasked && metaSafe.discordIdRaw) metaSafe.discordIdMasked = mask(metaSafe.discordIdRaw, 4, 2);
-     if (!metaSafe.hwidMasked && metaSafe.hwidRaw) metaSafe.hwidMasked = mask(metaSafe.hwidRaw, 6, 4);
-
-     sendAdminWebhookLog({
-    level,
-    event,
-    base,
-    message,
+    sendAdminWebhookLog({
+      level,
+      event,
+      base,
+      message,
       meta: metaSafe,
-  });
-
-// ================
-// PersistÃªncia no Mongo (Audit Log)
-// ================
+    });
+  }
 
   setImmediate(async () => {
     try {
@@ -722,9 +711,9 @@ function audit({ level = 'INFO', event, req, statusCode, message, meta = {} }) {
         ip: base.ip,
         userAgent: base.ua,
 
-        keyMasked: metaSafe.keyMasked || null,
-        hwidMasked: metaSafe.hwidMasked || null,
-        discordIdMasked: metaSafe.discordIdMasked || null,
+        keyMasked: metaSafe.keyMasked || metaSafe.keyRaw || null,
+        hwidMasked: metaSafe.hwidMasked || metaSafe.hwidRaw || null,
+        discordIdMasked: metaSafe.discordIdMasked || metaSafe.discordIdRaw || null,
 
         message,
         meta: metaSafe || {},
@@ -733,7 +722,6 @@ function audit({ level = 'INFO', event, req, statusCode, message, meta = {} }) {
       logger.warn(`[AUDIT_DB] falhou: ${e?.message || e}`);
     }
   });
-  }
 }
 
 // =====================
@@ -755,6 +743,13 @@ function requestContext(req, res, next) {
 }
 
 async function attachCensorMode(req, res, next) {
+  const path = String(req.path || req.originalUrl || '');
+  if (path.startsWith('/v1/admin')) {
+    req.censorEnabled = false;
+    res.setHeader('x-censor-enabled', '0');
+    return next();
+  }
+
   req.censorEnabled = await getCensorEnabled();
 
   const ov = getCensorOverride(req);

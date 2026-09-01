@@ -285,6 +285,15 @@ const KeysPage = () => {
     });
   };
 
+  const copySingleCreatedKey = (code: string) => {
+    navigator.clipboard.writeText(code);
+    addToast({
+      title: "Copiado!",
+      description: "Key copiada para a area de transferencia",
+      variant: "success",
+    });
+  };
+
   const getActionModalContent = () => {
     if (!actionModal.type || !actionModal.key) return null;
 
@@ -799,16 +808,33 @@ const KeysPage = () => {
               {createdKeys.map((key, i) => (
                 <div 
                   key={key.id} 
-                  className={`flex items-center justify-between py-2 ${i !== createdKeys.length - 1 ? "border-b border-border" : ""}`}
+                  className={`flex items-center justify-between gap-2 py-2 ${i !== createdKeys.length - 1 ? "border-b border-border" : ""}`}
                 >
-                  <div className="min-w-0">
-                    <span className="font-mono text-sm">{key.code}</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-mono text-sm break-all select-all">{key.code}</span>
+                    {key.productHash ? (
+                      <p className="mt-1 font-mono text-[10px] text-muted-foreground break-all">
+                        hash: {key.productHash}
+                      </p>
+                    ) : null}
                   </div>
-                  <span className="text-xs text-muted-foreground text-right">
-                    {key.expiresAt
-                      ? new Date(key.expiresAt).toLocaleDateString("pt-BR")
-                      : `${key.durationDays ?? "-"}d (no vinculo)`}
-                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-xs text-muted-foreground text-right">
+                      {key.expiresAt
+                        ? new Date(key.expiresAt).toLocaleDateString("pt-BR")
+                        : `${key.durationDays ?? "-"}d (no vinculo)`}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={() => copySingleCreatedKey(key.code)}
+                      title="Copiar key"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

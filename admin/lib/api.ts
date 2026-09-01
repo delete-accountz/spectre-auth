@@ -337,6 +337,7 @@ async function apiRequest<T>(
   const method = String(options.method || "GET").toUpperCase();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    "x-censor": "0",
   };
 
   if (options.headers instanceof Headers) {

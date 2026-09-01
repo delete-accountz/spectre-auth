@@ -335,20 +335,37 @@ export default function ProductsPage() {
                           <CardTitle className="truncate text-base font-semibold leading-none">
                             {product.name}
                           </CardTitle>
-                          <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
-                            <p className="truncate font-mono text-xs leading-none text-muted-foreground">
-                              {product.productHash || "Sem hash"}
-                            </p>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="h-5 w-5 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-                              onClick={() => void handleCopyHash(product.productHash)}
-                              title="Copiar hash"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </Button>
+                          <div className="mt-1.5 space-y-1">
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <p className="truncate font-mono text-xs leading-none text-muted-foreground">
+                                hash: {product.productHash || "Sem hash"}
+                              </p>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-5 w-5 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                                onClick={() => void handleCopyHash(product.productHash)}
+                                title="Copiar hash"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <p className="truncate font-mono text-[10px] leading-none text-muted-foreground">
+                                id: {product._id}
+                              </p>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-5 w-5 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                                onClick={() => void handleCopyHash(product._id)}
+                                title="Copiar ID"
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </div>
