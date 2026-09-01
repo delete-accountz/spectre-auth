@@ -1,3 +1,6 @@
+// IMPORTANTE: O 'productHash' deve ser copiado diretamente do Painel Admin (campo 'Hash' do produto).
+// Ele é usado pela API para vincular esta key a este produto específico, impedindo o uso de keys de outros produtos.
+
 #include <windows.h>
 #include <Wbemidl.h>
 #include <comdef.h>
@@ -17,6 +20,10 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "advapi32.lib")
 
+// IMPORTANTE: O 'productHash' deve ser copiado diretamente do Painel Admin (campo 'Hash' do produto).
+// Ele é usado pela API para vincular esta key a este produto específico, impedindo o uso de keys de outros produtos.
+// Cole abaixo o valor de 64 caracteres hex (SHA-256) do produto. Não use o Name nem o ID no lugar do Hash.
+
 using json = nlohmann::json;
 
 // ======================================================
@@ -24,6 +31,9 @@ using json = nlohmann::json;
 // ======================================================
 static constexpr const char* SAFETY_API_HOST = "web-production-d49df.up.railway.app";
 static constexpr const int SAFETY_API_PORT = 443; // HTTPS
+
+// Cole aqui o Hash do produto (64 hex) copiado do Painel Admin → Produtos → Hash.
+static constexpr const char* PRODUCT_HASH = "";
 
 // ======================================================
 // WinHTTP Wrapper
@@ -228,6 +238,8 @@ static std::string NormalizeProductHash(const std::string& value) {
 }
 
 bool SetProductHash(const std::string& productHash, std::string& error_message) {
+    // IMPORTANTE: O 'productHash' deve ser copiado diretamente do Painel Admin (campo 'Hash' do produto).
+    // Ele é usado pela API para vincular esta key a este produto específico, impedindo o uso de keys de outros produtos.
     std::string clean = NormalizeProductHash(productHash);
     if (!IsHex64(clean)) {
         error_message = "Invalid productHash. Expected SHA-256 hex (64 chars).";
@@ -486,6 +498,7 @@ bool PerformLogin(const std::string& licenseKey, const std::string& hwid, std::s
     std::string effectiveProductHash = NormalizeProductHash(productHash);
 
     if (effectiveProductHash.empty()) effectiveProductHash = GetProductHash();
+    if (effectiveProductHash.empty()) effectiveProductHash = NormalizeProductHash(PRODUCT_HASH);
     if (effectiveProductHash.empty()) {
         char* envHash = nullptr;
         size_t envLen = 0;

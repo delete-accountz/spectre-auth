@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState } from "react";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { ToastProvider } from "@/components/ui/toast-provider";
+import { Toaster } from "sonner";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { LoginForm } from "@/components/dashboard/login-form";
 
@@ -58,6 +59,7 @@ export default function DashboardLayout({
     <AuthProvider>
       <ToastProvider>
         <DashboardContent>{children}</DashboardContent>
+        <Toaster theme="dark" position="bottom-right" richColors />
       </ToastProvider>
     </AuthProvider>
   );

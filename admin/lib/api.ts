@@ -140,13 +140,18 @@ export interface MaintenanceData {
 
 // Products
 export interface Product {
+  id: string;
   _id: string;
   name: string;
-  productHash?: string | null;
+  productHash: string;
   hwidLockEnabled?: boolean;
   keysCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export function getProductId(product: Pick<Product, "id" | "_id">): string {
+  return product.id || product._id;
 }
 
 export interface ProductsResponse {

@@ -48,6 +48,7 @@ import {
   type CreateKeysItem,
   type KeyInfoData,
   getKeyInfo,
+  getProductId,
 } from "@/lib/api";
 import {
   DropdownMenu,
@@ -430,7 +431,7 @@ const KeysPage = () => {
                   >
                     <option value="">Todos</option>
                     {products.map((product) => (
-                      <option key={product._id} value={product._id}>
+                      <option key={getProductId(product)} value={getProductId(product)}>
                         {product.name}
                       </option>
                     ))}
@@ -864,7 +865,7 @@ const KeysPage = () => {
                 >
                   <option value="">Selecione um produto</option>
                   {products.map((product) => (
-                    <option key={product._id} value={product._id}>
+                    <option key={getProductId(product)} value={getProductId(product)}>
                       {product.name}
                     </option>
                   ))}

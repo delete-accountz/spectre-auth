@@ -23,7 +23,7 @@ import {
   CubeIcon as Package,
   UserIcon as User,
 } from "@heroicons/react/24/solid";
-import { getKeys, getProducts, type KeyItem, type Product } from "@/lib/api";
+import { getKeys, getProducts, getProductId, type KeyItem, type Product } from "@/lib/api";
 import Loading from "@/app/loading"; // Import Loading component
 
 export default function KeysListPage() {
@@ -163,7 +163,7 @@ export default function KeysListPage() {
                   >
                     <option value="">Todos</option>
                     {products.map((product) => (
-                      <option key={product._id} value={product._id}>
+                      <option key={getProductId(product)} value={getProductId(product)}>
                         {product.name}
                       </option>
                     ))}

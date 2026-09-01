@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Modal, ModalHeader, ModalTitle, ModalDescription, ModalFooter } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast-provider";
+import { toast } from "sonner";
 import { useSidebar } from "../layout";
 import {
   CubeIcon as Package,
@@ -32,6 +33,7 @@ import {
   updateProduct,
   deleteProduct,
   setProductHwidLock,
+  getProductId,
   type Product,
 } from "@/lib/api";
 import {
@@ -107,11 +109,17 @@ export default function ProductsPage() {
     setActionLoading(false);
 
     if (response.success) {
+      const created = response.data?.product;
       addToast({
         title: "Produto criado",
         description: `Produto "${newProductName}" criado com sucesso`,
         variant: "success",
       });
+      if (created?.productHash) {
+        toast.success("Credenciais do produto prontas", {
+          description: "Copie o Hash na lista e cole no loader C++",
+        });
+      }
       setCreateModalOpen(false);
       setNewProductName("");
       setNewProductHwidLock(true);
@@ -129,7 +137,7 @@ export default function ProductsPage() {
     if (!selectedProduct || !editProductName.trim()) return;
 
     setActionLoading(true);
-    const response = await updateProduct(selectedProduct._id, { name: editProductName.trim() });
+    const response = await updateProduct(getProductId(selectedProduct), { name: editProductName.trim() });
     setActionLoading(false);
 
     if (response.success) {
@@ -152,7 +160,7 @@ export default function ProductsPage() {
 
   const handleToggleHwidLock = async (product: ProductWithHwid) => {
     const newState = !product.hwidLockEnabled;
-    const response = await setProductHwidLock(product._id, newState);
+    const response = await setProductHwidLock(getProductId(product), newState);
 
     if (response.success) {
       addToast({
@@ -161,7 +169,7 @@ export default function ProductsPage() {
         variant: "success",
       });
       setProducts(prev => 
-        prev.map(p => p._id === product._id ? { ...p, hwidLockEnabled: newState } : p)
+        prev.map(p => getProductId(p) === getProductId(product) ? { ...p, hwidLockEnabled: newState } : p)
       );
     } else {
       addToast({
@@ -178,21 +186,17 @@ export default function ProductsPage() {
     setEditModalOpen(true);
   };
 
-  const handleCopyHash = async (productHash?: string | null) => {
-    if (!productHash) {
-      addToast({
-        title: "Sem hash",
-        description: "Este produto não possui hash para copiar",
-        variant: "warning",
-      });
+  const handleCopyCredential = async (label: "ID" | "Hash", value?: string | null) => {
+    if (!value) {
+      toast.error(`Este produto não possui ${label} para copiar`);
       return;
     }
 
-    await navigator.clipboard.writeText(productHash);
-    addToast({
-      title: "Hash copiado",
-      description: "Hash do produto copiado para a área de transferência",
-      variant: "success",
+    await navigator.clipboard.writeText(value);
+    toast.success(`${label} copiado`, {
+      description: label === "Hash"
+        ? "Cole este hash no seu loader C++"
+        : "ID do produto copiado para a área de transferência",
     });
   };
 
@@ -201,7 +205,7 @@ export default function ProductsPage() {
     if (!confirmed) return;
 
     setActionLoading(true);
-    const response = await deleteProduct(product._id);
+    const response = await deleteProduct(getProductId(product));
     setActionLoading(false);
 
     if (response.success) {
@@ -315,9 +319,11 @@ export default function ProductsPage() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {products.map((product, index) => (
+            {products.map((product, index) => {
+              const productId = getProductId(product);
+              return (
               <Card
-                key={product._id}
+                key={productId}
                 className="animate-slide-up opacity-0 border-border/80"
                 style={{
                   animationDelay: `${index * 40}ms`,
@@ -326,47 +332,58 @@ export default function ProductsPage() {
               >
                 <CardContent className="py-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1 space-y-3">
+                    <div className="min-w-0 flex-1 space-y-4">
                       <div className="flex min-w-0 items-center gap-3">
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
                           <Package className="h-4 w-4 text-muted-foreground" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <CardTitle className="truncate text-base font-semibold leading-none">
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Name</p>
+                          <CardTitle className="mt-1 truncate text-base font-semibold leading-none">
                             {product.name}
                           </CardTitle>
-                          <div className="mt-1.5 space-y-1">
-                            <div className="flex min-w-0 items-center gap-1.5">
-                              <p className="truncate font-mono text-xs leading-none text-muted-foreground">
-                                hash: {product.productHash || "Sem hash"}
-                              </p>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-5 w-5 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-                                onClick={() => void handleCopyHash(product.productHash)}
-                                title="Copiar hash"
-                              >
-                                <Copy className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
-                            <div className="flex min-w-0 items-center gap-1.5">
-                              <p className="truncate font-mono text-[10px] leading-none text-muted-foreground">
-                                id: {product._id}
-                              </p>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                className="h-5 w-5 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-                                onClick={() => void handleCopyHash(product._id)}
-                                title="Copiar ID"
-                              >
-                                <Copy className="h-3.5 w-3.5" />
-                              </Button>
-                            </div>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="rounded-lg border border-border/80 bg-muted/20 p-3">
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">ID</p>
+                          <div className="mt-1.5 flex items-start gap-2">
+                            <p className="min-w-0 flex-1 break-all font-mono text-xs leading-snug">
+                              {productId}
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 gap-1 bg-transparent px-2 text-xs"
+                              onClick={() => void handleCopyCredential("ID", productId)}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              Copy
+                            </Button>
                           </div>
+                        </div>
+                        <div className="rounded-lg border border-border/80 bg-muted/20 p-3">
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Hash</p>
+                          <div className="mt-1.5 flex items-start gap-2">
+                            <p className="min-w-0 flex-1 break-all font-mono text-xs leading-snug">
+                              {product.productHash || "Sem hash"}
+                            </p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 gap-1 bg-transparent px-2 text-xs"
+                              onClick={() => void handleCopyCredential("Hash", product.productHash)}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              Copy
+                            </Button>
+                          </div>
+                          <p className="mt-2 text-[11px] text-muted-foreground">
+                            Cole este hash no seu loader C++
+                          </p>
                         </div>
                       </div>
 
@@ -432,7 +449,8 @@ export default function ProductsPage() {
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
 

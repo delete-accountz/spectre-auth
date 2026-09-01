@@ -311,6 +311,21 @@ async function ensureProductHash(productDoc) {
   return nextHash;
 }
 
+function toAdminProduct(p, hashOverride) {
+  const id = String(p?._id || '');
+  const productHash = String(hashOverride || p?.productHash || computeProductHash(id)).toLowerCase();
+  return {
+    id,
+    _id: id,
+    name: p?.name || '',
+    productHash,
+    hwidLockEnabled: typeof p?.hwidLockEnabled === 'boolean' ? p.hwidLockEnabled : true,
+    keysCount: Number(p?.keysCount || 0),
+    createdAt: p?.createdAt || null,
+    updatedAt: p?.updatedAt || null,
+  };
+}
+
 function computeKeyScopeHash({ username, licenseKey, productId }) {
   const salt = String(process.env.KEY_SCOPE_SALT || '');
   return sha256Hex(`${salt}:scope:${String(username || '')}:${String(licenseKey || '').toUpperCase()}:${String(productId || '')}`);
@@ -1999,7 +2014,8 @@ app.post("/v1/webhooks/efi", async (req, res) => {
       keyNeedsSave = true;
     }
 
-    if (!expectedProductHash || !timingSafeEqual(expectedProductHash, productHash)) {
+    const boundHash = canonicalProductHash || expectedProductHash;
+    if (!boundHash || !timingSafeEqual(boundHash, productHash)) {
       audit({ level: 'WARN', event: 'AUTH_PRODUCT_MISMATCH', req, statusCode: 401,
         message: 'productHash invalido', meta: { keyMasked, hwidMasked, reason: 'product_mismatch', client } });
       return fail(res, req, 401, 'Product invalid', 'PRODUCT_MISMATCH');
@@ -3598,10 +3614,11 @@ app.get('/v1/admin/products', requireAdminToken, async (req, res) => {
       Product.countDocuments(filter),
     ]);
 
-    const mapped = items.map((p) => ({
-      ...p,
-      productHash: p.productHash || computeProductHash(String(p._id)),
-    }));
+    const mapped = [];
+    for (const p of items) {
+      const productHash = await ensureProductHash(p);
+      mapped.push(toAdminProduct(p, productHash));
+    }
 
     return ok(res, req, 'OK', { page, limit, total, pages: Math.ceil(total / limit), items: mapped });
   } catch (e) {
@@ -3623,10 +3640,9 @@ app.post('/v1/admin/products', requireAdminToken, async (req, res) => {
     createdByAdmin: creatorAdminId || null,
   });
 
-  const productHash = await ensureProductHash(doc);
-  if (productHash && !doc.productHash) {
-    doc.productHash = productHash;
-  }
+  const productHash = computeProductHash(String(doc._id));
+  await Product.updateOne({ _id: doc._id }, { $set: { productHash } });
+  doc.productHash = productHash;
 
   audit({
     level: 'WARN',
@@ -3638,10 +3654,7 @@ app.post('/v1/admin/products', requireAdminToken, async (req, res) => {
   });
 
   return ok(res, req, 'Created', {
-    product: {
-      ...(typeof doc.toObject === 'function' ? doc.toObject() : doc),
-      productHash: doc.productHash || productHash || computeProductHash(String(doc._id)),
-    },
+    product: toAdminProduct(doc, productHash),
   });
 });
 
@@ -3667,7 +3680,7 @@ app.put('/v1/admin/products/:id', requireAdminToken, async (req, res) => {
   if (!doc) return fail(res, req, 404, 'Not found', 'NOT_FOUND');
 
   audit({ level:'WARN', event:'ADMIN_PRODUCT_UPDATE', req, statusCode:200, message:'Product updated', meta:{ productId:id } });
-  return ok(res, req, 'Updated', { product: doc });
+  return ok(res, req, 'Updated', { product: toAdminProduct(doc) });
 });
 
 app.put('/v1/admin/products/:id/hwid-lock', requireAdminToken, async (req, res) => {
@@ -3701,7 +3714,7 @@ app.put('/v1/admin/products/:id/hwid-lock', requireAdminToken, async (req, res) 
     meta: { productId: id, enabled },
   });
 
-  return ok(res, req, 'Updated', { product: doc });
+  return ok(res, req, 'Updated', { product: toAdminProduct(doc) });
 });
 
 app.delete('/v1/admin/products/:id', requireAdminToken, async (req, res) => {
