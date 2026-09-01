@@ -3810,7 +3810,7 @@ app.post('/v1/admin/keys/create', requireAdminToken, async (req, res) => {
 
     created.push({
       id: String(doc._id),
-      code: outKey(req, doc.code),
+      code: String(doc.code),
       durationDays: doc.durationDays,
       activatesOn: 'bind',
       productHash: doc.productHash,
