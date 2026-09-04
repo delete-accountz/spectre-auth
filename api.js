@@ -142,6 +142,48 @@ async function setSetting(key, value, updatedBy = 'dashboard') {
   ).lean();
 }
 
+async function getLogWriteHealth() {
+  return getSetting('logWriteHealth', { ok: true, lastError: null, at: null, event: null });
+}
+
+async function markLogWriteOk() {
+  const current = await getLogWriteHealth();
+  if (current?.ok !== false) return;
+  await setSetting('logWriteHealth', {
+    ok: true,
+    lastError: null,
+    at: new Date().toISOString(),
+    event: null,
+    recoveredAt: new Date().toISOString(),
+  }, 'audit');
+}
+
+async function markLogWriteFailure({ error, event, requestId }) {
+  const payload = {
+    ok: false,
+    lastError: String(error || 'unknown').slice(0, 400),
+    at: new Date().toISOString(),
+    event: event || null,
+    requestId: requestId || null,
+  };
+  try {
+    await setSetting('logWriteHealth', payload, 'audit');
+  } catch (e) {
+    logger.error(`[AUDIT_DB] falhou ao persistir alerta: ${e?.message || e}`);
+  }
+  try {
+    sendAdminWebhookLog({
+      level: 'ERROR',
+      event: 'AUDIT_DB_FAILED',
+      base: { requestId: requestId || null, event: 'AUDIT_DB_FAILED', route: '/internal/audit', method: 'WRITE', statusCode: 500, ip: null, ua: null, latencyMs: null },
+      message: `Falha ao gravar audit log: ${payload.lastError}`,
+      meta: payload,
+    });
+  } catch (e) {
+    logger.error(`[AUDIT_DB] falhou ao enviar alerta: ${e?.message || e}`);
+  }
+}
+
 
 const DEFAULT_CENSOR = String(process.env.DEFAULT_CENSOR || '1') === '1';
 const CENSOR_CACHE_TTL_MS = 5000;
@@ -733,8 +775,10 @@ function audit({ level = 'INFO', event, req, statusCode, message, meta = {} }) {
         message,
         meta: metaSafe || {},
       });
+      await markLogWriteOk();
     } catch (e) {
-      logger.warn(`[AUDIT_DB] falhou: ${e?.message || e}`);
+      logger.error(`[AUDIT_DB] falhou: ${e?.message || e}`);
+      await markLogWriteFailure({ error: e?.message || e, event, requestId: base.requestId });
     }
   });
 }
@@ -953,7 +997,7 @@ function getAdminRoutePermission(req) {
 
   if (path.startsWith('/v1/admin/owner/')) return 'owner.manage';
   if (path === '/v1/admin/overview') return 'overview.read';
-  if (path === '/v1/admin/system/status') return 'system.read';
+  if (path === '/v1/admin/system/status' || path === '/v1/admin/system/log-health') return 'system.read';
   if (path.startsWith('/v1/admin/audit-logs')) return 'logs.read';
   if (path.startsWith('/v1/admin/settings/')) return 'settings.manage';
   if (path.startsWith('/v1/admin/maintenance')) return 'settings.manage';
@@ -2000,6 +2044,12 @@ app.post("/v1/webhooks/efi", async (req, res) => {
       return fail(res, req, 401, 'Invalid license key', 'INVALID_CREDENTIALS');
     }
 
+    if (String(keyDoc.type || 'standard') === 'loader') {
+      audit({ level: 'WARN', event: 'AUTH_WRONG_LICENSE_TYPE', req, statusCode: 401,
+        message: 'Key de Loader nao usa /v1/auth/login', meta: { keyMasked, hwidMasked, reason: 'loader_key', client } });
+      return fail(res, req, 401, 'Use /v1/auth/loader/check', 'WRONG_LICENSE_TYPE');
+    }
+
     let keyNeedsSave = ensureKeyHashes(keyDoc);
 
     const productId = normalizeProductId(keyDoc.product);
@@ -2100,7 +2150,7 @@ app.post("/v1/webhooks/efi", async (req, res) => {
     const daysLeft = Math.max(0, Math.floor(msLeft / (1000 * 60 * 60 * 24)));
 
     audit({ level: 'INFO', event: 'AUTH_SUCCESS', req, statusCode: 200,
-      message: 'Login autorizado', meta: { keyMasked, hwidMasked, client, hwidLockOn } });
+      message: 'Login autorizado', meta: { keyMasked, hwidMasked, client, hwidLockOn, productId } });
 
     return ok(res, req, 'Authorized', {
       product,
@@ -2116,6 +2166,158 @@ app.post("/v1/webhooks/efi", async (req, res) => {
     return fail(res, req, 500, 'Internal server error', 'INTERNAL');
   }
 });
+
+app.post('/v1/auth/loader/check', loginLimiter, validateLoginBody, async (req, res) => {
+  const { licenseKey, hwid, productHash, client } = req.body;
+  const sid = cleanStr(req.body?.sid, 120) || null;
+  const clientIp = getClientIp(req);
+  const now = new Date();
+  const keyMasked = mask(licenseKey);
+  const hwidMasked = mask(hwid, 6, 4);
+
+  try {
+    const keyDoc = await Key.findOne({ code: licenseKey, type: 'loader' }).populate('product');
+    if (!keyDoc) {
+      audit({
+        level: 'WARN',
+        event: 'LOADER_CHECK_KEY_NOT_FOUND',
+        req,
+        statusCode: 401,
+        message: 'Loader key inexistente',
+        meta: { keyMasked, hwidMasked, reason: 'not_found', client },
+      });
+      return fail(res, req, 401, 'Invalid license key', 'INVALID_CREDENTIALS');
+    }
+
+    const productId = normalizeProductId(keyDoc.product);
+    const liveProductHash = (keyDoc?.product?.productHash && /^[a-f0-9]{64}$/i.test(keyDoc.product.productHash)
+      ? String(keyDoc.product.productHash).toLowerCase()
+      : (productId ? await ensureProductHash(keyDoc.product || { _id: productId }) : null));
+
+    if (!liveProductHash || !timingSafeEqual(liveProductHash, productHash)) {
+      audit({
+        level: 'WARN',
+        event: 'LOADER_CHECK_PRODUCT_MISMATCH',
+        req,
+        statusCode: 401,
+        message: 'productHash do loader nao bate com o hash atual do produto',
+        meta: { keyMasked, hwidMasked, productId, reason: 'product_mismatch', client },
+      });
+      return fail(res, req, 401, 'Product invalid', 'PRODUCT_MISMATCH');
+    }
+
+    if (keyDoc.banned) {
+      audit({
+        level: 'WARN',
+        event: 'LOADER_CHECK_BANNED',
+        req,
+        statusCode: 401,
+        message: 'Loader key banida',
+        meta: { keyMasked, productId, client },
+      });
+      return fail(res, req, 401, keyDoc.banReason || 'Banned', 'KEY_BANNED');
+    }
+    if (keyDoc.paused) {
+      audit({
+        level: 'WARN',
+        event: 'LOADER_CHECK_PAUSED',
+        req,
+        statusCode: 403,
+        message: 'Loader key pausada',
+        meta: { keyMasked, productId, client },
+      });
+      return fail(res, req, 403, 'Key paused', 'KEY_PAUSED');
+    }
+
+    let keyNeedsSave = false;
+    const wasUnlinked = !keyDoc.usedBy;
+    if (wasUnlinked) {
+      keyDoc.usedBy = licenseKey;
+      keyDoc.usedAt = keyDoc.usedAt ?? now;
+      keyNeedsSave = true;
+    }
+
+    keyNeedsSave = activateKeyOnBind(keyDoc, now) || keyNeedsSave;
+
+    if (keyDoc.expiresAt && keyDoc.expiresAt <= now) {
+      if (keyNeedsSave) await keyDoc.save().catch(() => {});
+      audit({
+        level: 'WARN',
+        event: 'LOADER_CHECK_EXPIRED',
+        req,
+        statusCode: 401,
+        message: 'Loader key expirada',
+        meta: { keyMasked, hwidMasked, productId, client },
+      });
+      return fail(res, req, 401, 'License expired', 'KEY_EXPIRED');
+    }
+
+    const security = await getSetting('security', { hwidLockGlobal: true });
+    const hwidLockGlobal = security?.hwidLockGlobal !== false;
+    const productDoc = keyDoc.product;
+    const hwidLockProduct = (productDoc && typeof productDoc.hwidLockEnabled === 'boolean')
+      ? productDoc.hwidLockEnabled : true;
+    const hwidLockOn = hwidLockGlobal && hwidLockProduct;
+    const incomingStored = computeStoredHwid(hwid);
+
+    if (!keyDoc.hwid) {
+      keyDoc.hwid = incomingStored;
+      if (sid) keyDoc.sid = sid;
+      keyDoc.lastIp = clientIp;
+      keyNeedsSave = true;
+    } else if (hwidLockOn) {
+      const okHwid = timingSafeEqual(keyDoc.hwid, incomingStored);
+      if (!okHwid) {
+        audit({
+          level: 'WARN',
+          event: 'LOADER_CHECK_HWID_MISMATCH',
+          req,
+          statusCode: 401,
+          message: 'HWID mismatch no loader',
+          meta: { keyMasked, hwidMasked, productId, client },
+        });
+        return fail(res, req, 401, 'HWID mismatch', 'HWID_MISMATCH');
+      }
+    }
+
+    if (keyNeedsSave) await keyDoc.save();
+
+    const msLeft = keyDoc.expiresAt ? (keyDoc.expiresAt - now) : 0;
+    const daysLeft = keyDoc.expiresAt ? Math.max(0, Math.floor(msLeft / (1000 * 60 * 60 * 24))) : null;
+
+    audit({
+      level: 'INFO',
+      event: 'LOADER_CHECK_SUCCESS',
+      req,
+      statusCode: 200,
+      message: 'Loader check autorizado',
+      meta: { keyMasked, hwidMasked, productId, productHash: liveProductHash, client, hwidLockOn },
+    });
+
+    return ok(res, req, 'Authorized', {
+      type: 'loader',
+      product: {
+        id: productId,
+        name: keyDoc.product?.name || null,
+        hash: liveProductHash,
+      },
+      licenseKey: keyMasked,
+      expiresAt: keyDoc.expiresAt ? keyDoc.expiresAt.toISOString() : null,
+      daysLeft,
+    });
+  } catch (error) {
+    audit({
+      level: 'ERROR',
+      event: 'LOADER_CHECK_INTERNAL_ERROR',
+      req,
+      statusCode: 500,
+      message: error?.message || 'Erro interno',
+      meta: { keyMasked, hwidMasked },
+    });
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
 // =====================
 // CLIENT ROUTES
 // =====================
@@ -3561,6 +3763,7 @@ app.get('/v1/admin/overview', requireAdminToken, async (req, res) => {
       expiringSoon,
       linkedUserProducts: linkedUserProducts?.[0]?.total || 0,
       uniqueLinkedUsers,
+      logWriteHealth: await getLogWriteHealth(),
     });
   } catch (e) {
     return fail(res, req, 500, 'Internal server error', 'INTERNAL');
@@ -3584,6 +3787,15 @@ app.get('/v1/admin/system/status', requireAdminToken, async (req, res) => {
         name: mongoose?.connection?.name || null,
       },
     });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.get('/v1/admin/system/log-health', requireAdminToken, async (req, res) => {
+  try {
+    const health = await getLogWriteHealth();
+    return ok(res, req, 'OK', { logWriteHealth: health });
   } catch (e) {
     return fail(res, req, 500, 'Internal server error', 'INTERNAL');
   }
@@ -3804,6 +4016,7 @@ app.post('/v1/admin/keys/create', requireAdminToken, async (req, res) => {
       product: productId,
       productHash: canonicalProductHash,
       createdByAdmin: creatorAdminId || null,
+      type: 'standard',
       durationDays: days,
       activatedAt: null,
       expiresAt: null,
@@ -3834,10 +4047,93 @@ app.post('/v1/admin/keys/create', requireAdminToken, async (req, res) => {
     req,
     statusCode: 200,
     message: `Created ${created.length} key(s)`,
-    meta: { productId, days, quantity: created.length, prefix },
+    meta: { productId, days, quantity: created.length, prefix, type: 'standard' },
   });
 
   return ok(res, req, 'Created', { items: created });
+});
+
+app.post('/v1/admin/keys/loader/create', requireAdminToken, async (req, res) => {
+  const productId = String(req.body?.productId || '').trim();
+  if (!/^[0-9a-f]{24}$/i.test(productId)) return fail(res, req, 400, 'Invalid productId', 'BAD_REQUEST');
+
+  const days = parseDays(req.body?.days);
+  if (days === null || days <= 0) return fail(res, req, 400, 'Invalid days', 'BAD_REQUEST');
+
+  const quantityRaw = Number(req.body?.quantity ?? 1);
+  if (!Number.isFinite(quantityRaw)) return fail(res, req, 400, 'Invalid quantity', 'BAD_REQUEST');
+  const quantity = Math.min(500, Math.max(1, Math.trunc(quantityRaw)));
+
+  const prefix = req.body?.prefix
+    ? String(req.body.prefix).trim().toUpperCase()
+    : (process.env.KEY_PREFIX || 'Spectre');
+
+  const productWhere = { _id: productId };
+  if (!isOwnerAdmin(req)) {
+    const adminId = getSessionAdminId(req);
+    if (!adminId) return fail(res, req, 403, 'Forbidden', 'FORBIDDEN');
+    productWhere.createdByAdmin = adminId;
+  }
+
+  const product = await Product.findOne(productWhere).lean();
+  if (!product) return fail(res, req, 404, 'Product not found', 'NOT_FOUND');
+
+  const liveProductHash = product.productHash && /^[a-f0-9]{64}$/i.test(product.productHash)
+    ? String(product.productHash).toLowerCase()
+    : await ensureProductHash(product);
+  if (!liveProductHash) return fail(res, req, 500, 'Product hash missing', 'MISCONFIG');
+  if (!product.productHash) {
+    await Product.updateOne({ _id: product._id }, { $set: { productHash: liveProductHash } }).catch(() => {});
+  }
+
+  const creatorAdminId = getSessionAdminId(req);
+  const created = [];
+
+  for (let i = 0; i < quantity; i++) {
+    const code = await generateKey(prefix);
+    const doc = await Key.create({
+      prefix,
+      code,
+      codeHash: sha256Hex(String(code).toUpperCase()),
+      product: productId,
+      productHash: liveProductHash,
+      createdByAdmin: creatorAdminId || null,
+      type: 'loader',
+      durationDays: days,
+      activatedAt: null,
+      expiresAt: null,
+      usedBy: null,
+      usedAt: null,
+      keyScopeHash: null,
+      hwid: null,
+      paused: false,
+      banned: false,
+      banReason: null,
+    });
+
+    created.push({
+      id: String(doc._id),
+      code: String(doc.code),
+      type: 'loader',
+      durationDays: doc.durationDays,
+      activatesOn: 'bind',
+      productHash: liveProductHash,
+      expiresAt: doc.expiresAt,
+    });
+  }
+
+  await Product.updateOne({ _id: productId }, { $inc: { keysCount: created.length } });
+
+  audit({
+    level: 'WARN',
+    event: 'ADMIN_LOADER_KEYS_CREATE',
+    req,
+    statusCode: 200,
+    message: `Created ${created.length} loader key(s)`,
+    meta: { productId, days, quantity: created.length, prefix, type: 'loader', productHash: liveProductHash },
+  });
+
+  return ok(res, req, 'Created', { items: created, product: { id: String(product._id), name: product.name, productHash: liveProductHash } });
 });
 
 app.get('/v1/admin/users/:username', requireAdminToken, async (req, res) => {
@@ -4062,9 +4358,13 @@ app.get('/v1/admin/keys', requireAdminToken, async (req, res) => {
     const q = String(req.query.q || '').trim().toUpperCase();
     const status = String(req.query.status || '').trim().toLowerCase();
     const productId = String(req.query.productId || '').trim();
+    const typeFilter = String(req.query.type || 'standard').trim().toLowerCase();
 
     const now = new Date();
     const filter = await getKeyAdminScopeClause(req);
+
+    if (typeFilter === 'loader') filter.type = 'loader';
+    else filter.type = { $ne: 'loader' };
 
     if (productId && /^[0-9a-fA-F]{24}$/.test(productId)) filter.product = productId;
 
@@ -4091,7 +4391,7 @@ app.get('/v1/admin/keys', requireAdminToken, async (req, res) => {
 
     const [items, total] = await Promise.all([
       Key.find(filter)
-        .populate('product', 'name')
+        .populate('product', 'name productHash')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -4103,12 +4403,13 @@ app.get('/v1/admin/keys', requireAdminToken, async (req, res) => {
   id: String(k._id),
   prefix: k.prefix,
   code: outKey(req, k.code),
-  product: k.product ? { id: String(k.product._id), name: k.product.name } : null,
+  type: k.type || 'standard',
+  product: k.product ? { id: String(k.product._id), name: k.product.name, productHash: k.product.productHash || null } : null,
   createdAt: k.createdAt,
   durationDays: k.durationDays ?? null,
   activatedAt: k.activatedAt || null,
   expiresAt: k.expiresAt,
-  productHash: k.productHash || null,
+  productHash: (k.product && k.product.productHash) || k.productHash || null,
   usedBy: outUsername(req, k.usedBy),
   usedAt: k.usedAt || null,
   hwid: req.censorEnabled ? (k.hwid ? 'SET' : null) : (k.hwid || null),

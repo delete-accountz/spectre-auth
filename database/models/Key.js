@@ -9,6 +9,7 @@ const keySchema = new mongoose.Schema(
     product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
     productHash: { type: String, default: null, index: true },
     createdByAdmin: { type: mongoose.Schema.Types.ObjectId, ref: 'AdminUser', default: null, index: true },
+    type: { type: String, enum: ['standard', 'loader'], default: 'standard', index: true },
 
     durationDays: { type: Number, default: null },
     activatedAt: { type: Date, default: null },

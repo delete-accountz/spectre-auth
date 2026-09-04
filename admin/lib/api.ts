@@ -95,6 +95,20 @@ export interface OverviewData {
   expiringSoon?: number;
   linkedUserProducts?: number;
   uniqueLinkedUsers?: number;
+  logWriteHealth?: {
+    ok?: boolean;
+    lastError?: string | null;
+    at?: string | null;
+    event?: string | null;
+  };
+}
+
+export interface LogWriteHealth {
+  ok?: boolean;
+  lastError?: string | null;
+  at?: string | null;
+  event?: string | null;
+  requestId?: string | null;
 }
 
 export interface KeyActionResponse {
@@ -664,12 +678,13 @@ export async function deleteProduct(
 export async function getKeys(
   page = 1,
   limit = 25,
-  options?: { q?: string; status?: string; productId?: string }
+  options?: { q?: string; status?: string; productId?: string; type?: "standard" | "loader" }
 ): Promise<ApiResponse<KeysResponse>> {
   const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   if (options?.q) params.append("q", options.q);
   if (options?.status) params.append("status", options.status);
   if (options?.productId) params.append("productId", options.productId);
+  if (options?.type) params.append("type", options.type);
   return apiRequest<KeysResponse>(`/v1/admin/keys?${params}`);
 }
 
@@ -683,6 +698,22 @@ export async function createKeys(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function createLoaderKeys(payload: {
+  productId: string;
+  days: number;
+  quantity?: number;
+  prefix?: string;
+}): Promise<ApiResponse<{ items: CreateKeysItem[]; product?: Product }>> {
+  return apiRequest<{ items: CreateKeysItem[]; product?: Product }>("/v1/admin/keys/loader/create", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getLogWriteHealth(): Promise<ApiResponse<{ logWriteHealth: LogWriteHealth }>> {
+  return apiRequest<{ logWriteHealth: LogWriteHealth }>("/v1/admin/system/log-health");
 }
 
 export async function deleteKey(

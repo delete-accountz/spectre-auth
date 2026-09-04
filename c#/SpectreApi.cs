@@ -15,27 +15,19 @@ public class AuthResult
     public string Message { get; set; }
     public string RequestId { get; set; }
     public string RawBody { get; set; }
-
     public bool Success => StatusCode >= 200 && StatusCode < 300;
 }
 
 public class LoginResult : AuthResult
 {
-    public string Username { get; set; }
-
+    public string LicenseKey { get; set; }
     public DateTime? ExpiresAt { get; set; }
     public int? DaysLeft { get; set; }
-
     public string ProductId { get; set; }
     public string ProductName { get; set; }
     public string ProductHash { get; set; }
-
     public string ConfigVersion { get; set; }
     public string DownloadLink { get; set; }
-
-    // Perfil do usuário (preenchido pelo servidor)
-    public string DisplayName { get; set; }
-    public string AvatarUrl { get; set; }
 }
 
 public sealed class SpectreAuth : IDisposable
@@ -45,22 +37,21 @@ public sealed class SpectreAuth : IDisposable
     private bool _initialized;
     private string _configuredProductHash;
 
-    // controla logs no console
     public bool DebugEnabled { get; set; } = false;
 
-    public SpectreAuth(string baseUrl = "https://spectre.squareweb.app/", int timeoutSeconds = 15, string productHash = null)
+    public SpectreAuth(string baseUrl = "https://spectre-auth-production-13a2.up.railway.app/", 
+                       int timeoutSeconds = 15, 
+                       string productHash = null)
     {
         if (string.IsNullOrWhiteSpace(baseUrl))
-            throw new ArgumentException("baseUrl inválido.");
-
+            throw new ArgumentException("baseUrl inválido.", nameof(baseUrl));
+        
         _baseUrl = NormalizeBaseUrl(baseUrl);
-
         _http = new HttpClient
         {
             BaseAddress = new Uri(_baseUrl),
             Timeout = TimeSpan.FromSeconds(Math.Max(3, timeoutSeconds))
         };
-
         _http.DefaultRequestHeaders.Accept.Clear();
         _http.DefaultRequestHeaders.Accept.Add(
             new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json")
@@ -86,7 +77,6 @@ public sealed class SpectreAuth : IDisposable
             error = "productHash inválido. Esperado SHA-256 em hex (64 chars).";
             return false;
         }
-
         _configuredProductHash = clean;
         error = null;
         return true;
@@ -102,10 +92,8 @@ public sealed class SpectreAuth : IDisposable
         string effective = string.IsNullOrWhiteSpace(productHash)
             ? _configuredProductHash
             : productHash;
-
         if (string.IsNullOrWhiteSpace(effective))
             effective = Environment.GetEnvironmentVariable("SAFETY_PRODUCT_HASH");
-
         return (effective ?? "").Trim().ToLowerInvariant();
     }
 
@@ -128,9 +116,8 @@ public sealed class SpectreAuth : IDisposable
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SpectreAuth] {title}: <empty>");
             return;
         }
-
         string safe = json.Length > maxLen ? json.Substring(0, maxLen) + " ... (truncado)" : json;
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SafetyAPI] {title}: {safe}");
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [SpectreAuth] {title}: {safe}");
     }
 
     public async Task<AuthResult> InitAsync()
@@ -138,7 +125,6 @@ public sealed class SpectreAuth : IDisposable
         Log("InitAsync() -> checando /v1/health...");
         var res = await HealthAsync();
         _initialized = res.Success;
-
         Log($"Init result: success={res.Success} status={res.StatusCode} requestId={res.RequestId} msg={res.Message}");
         return res;
     }
@@ -153,14 +139,12 @@ public sealed class SpectreAuth : IDisposable
     {
         var r = await SafeGetAsync("/v1/health");
         if (r.Success) return r;
-
         var legacy = await SafeGetAsync("/status");
         return legacy;
     }
 
     public async Task<LoginResult> LoginAsync(
-        string username,
-        string password,
+        string licenseKey,
         string hwid = null,
         string clientName = "loader",
         string clientVersion = "1.0.0",
@@ -172,26 +156,17 @@ public sealed class SpectreAuth : IDisposable
             return new LoginResult
             {
                 StatusCode = 0,
-                Message = "SafetyAPI não foi inicializada. Chame InitAsync() antes de LoginAsync()."
+                Message = "SpectreAuth não foi inicializada. Chame InitAsync() antes de LoginAsync()."
             };
         }
 
-        if (string.IsNullOrWhiteSpace(username))
-            return new LoginResult { StatusCode = 0, Message = "Username vazio." };
-
-        if (string.IsNullOrWhiteSpace(password) || password.Length < 6 || password.Length > 200)
-            return new LoginResult { StatusCode = 0, Message = "Password inválido (6-200 chars)." };
-
-        username = username.Trim().ToLowerInvariant();
-
-        if (!IsValidUsername(username))
-            return new LoginResult { StatusCode = 0, Message = "Username inválido (3-40 chars, letras/números/_-.)." };
+        if (string.IsNullOrWhiteSpace(licenseKey) || licenseKey.Length < 10 || licenseKey.Length > 80)
+            return new LoginResult { StatusCode = 0, Message = "License Key inválida (10-80 chars)." };
 
         if (string.IsNullOrWhiteSpace(hwid))
             hwid = GenerateHwid();
 
         hwid = hwid.Trim();
-
         string effectiveProductHash = ResolveProductHash(productHash);
 
         if (!IsHex64(effectiveProductHash))
@@ -205,8 +180,7 @@ public sealed class SpectreAuth : IDisposable
 
         var payload = new
         {
-            username = username,
-            password = password,
+            licenseKey = licenseKey.Trim().ToUpperInvariant(),
             hwid = hwid,
             productHash = effectiveProductHash,
             client = new
@@ -218,18 +192,15 @@ public sealed class SpectreAuth : IDisposable
         };
 
         string json = JsonConvert.SerializeObject(payload);
-
         Log("LoginAsync() -> POST /v1/auth/login");
-        Log($"username={username}");
+        Log($"licenseKey={Mask(licenseKey, 4, 4)}");
         Log($"hwid(sha256)={Mask(hwid, 6, 6)}");
         Log($"productHash={Mask(effectiveProductHash, 8, 8)}");
         LogJson("payload", json);
 
         var content = new StringContent(json, Encoding.UTF8, "application/json");
-
         HttpResponseMessage resp = null;
         string body = null;
-
         var sw = Stopwatch.StartNew();
 
         try
@@ -242,12 +213,11 @@ public sealed class SpectreAuth : IDisposable
             {
                 StatusCode = (int)resp.StatusCode,
                 RawBody = body,
-                Username = username
+                LicenseKey = licenseKey
             };
 
             result.RequestId = TryGetHeader(resp, "x-request-id") ?? TryGetJsonField(body, "requestId");
 
-            // Logs do response
             Log($"Response status={(int)resp.StatusCode} time={sw.ElapsedMilliseconds}ms requestId={result.RequestId}");
             LogJson("responseBody", body);
 
@@ -259,13 +229,11 @@ public sealed class SpectreAuth : IDisposable
             }
 
             result.Message = ParseApiMessage(body, "Authorized");
-
             TryFillLoginData(result, body);
 
             Log($"Login OK ✅");
             Log($"expiresAt={result.ExpiresAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "null"} daysLeft={result.DaysLeft?.ToString() ?? "null"}");
             Log($"product={result.ProductName} ({result.ProductId})");
-            Log($"user.username={result.Username ?? "null"} displayName={result.DisplayName ?? "null"} avatarUrl={result.AvatarUrl ?? "null"}");
 
             return result;
         }
@@ -319,7 +287,6 @@ public sealed class SpectreAuth : IDisposable
     {
         HttpResponseMessage resp = null;
         string body = null;
-
         try
         {
             Log($"GET {path}");
@@ -366,19 +333,15 @@ public sealed class SpectreAuth : IDisposable
     {
         if (string.IsNullOrWhiteSpace(responseBody))
             return fallback;
-
         try
         {
             var j = JObject.Parse(responseBody);
-
             var msg = j.SelectToken("message")?.ToString();
             if (!string.IsNullOrWhiteSpace(msg))
                 return msg;
-
             var code = j.SelectToken("error.code")?.ToString();
             if (!string.IsNullOrWhiteSpace(code))
                 return code;
-
             return fallback;
         }
         catch
@@ -391,7 +354,6 @@ public sealed class SpectreAuth : IDisposable
     {
         if (string.IsNullOrWhiteSpace(responseBody))
             return null;
-
         try
         {
             var j = JObject.Parse(responseBody);
@@ -404,38 +366,28 @@ public sealed class SpectreAuth : IDisposable
     {
         if (string.IsNullOrWhiteSpace(responseBody))
             return;
-
         JObject j;
         try { j = JObject.Parse(responseBody); }
         catch { return; }
 
-        // data.expiresAt
         var expiresAtStr = j.SelectToken("data.expiresAt")?.ToString();
         if (!string.IsNullOrWhiteSpace(expiresAtStr) && DateTime.TryParse(expiresAtStr, out var dt))
             result.ExpiresAt = dt;
 
-        // data.daysLeft
         var daysLeftTok = j.SelectToken("data.daysLeft");
         if (daysLeftTok != null && int.TryParse(daysLeftTok.ToString(), out var days))
             result.DaysLeft = days;
 
-        // product
-        result.ProductId   = j.SelectToken("data.product.id")?.ToString();
+        result.ProductId = j.SelectToken("data.product.id")?.ToString();
         result.ProductName = j.SelectToken("data.product.name")?.ToString();
         result.ProductHash = j.SelectToken("data.product.hash")?.ToString();
 
-        // config
         result.ConfigVersion = j.SelectToken("data.config.version")?.ToString();
-        result.DownloadLink  = j.SelectToken("data.config.downloadLink")?.ToString();
+        result.DownloadLink = j.SelectToken("data.config.downloadLink")?.ToString();
 
-        // user (novo formato sem Discord)
-        result.DisplayName = j.SelectToken("data.user.displayName")?.ToString();
-        result.AvatarUrl   = j.SelectToken("data.user.avatarUrl")?.ToString();
-
-        // username também vem no data.username
-        var uFromData = j.SelectToken("data.username")?.ToString();
-        if (!string.IsNullOrWhiteSpace(uFromData))
-            result.Username = uFromData;
+        var licenseFromData = j.SelectToken("data.licenseKey")?.ToString();
+        if (!string.IsNullOrWhiteSpace(licenseFromData))
+            result.LicenseKey = licenseFromData;
     }
 
     private static string TryGetHeader(HttpResponseMessage resp, string headerName)
@@ -459,6 +411,7 @@ public sealed class SpectreAuth : IDisposable
             string cpuId = "";
             string biosSerial = "";
             string diskSerial = "";
+            string sidStr = "";
 
             using (var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
             {
@@ -496,7 +449,14 @@ public sealed class SpectreAuth : IDisposable
                 }
             }
 
-            var raw = $"{motherboardSerial}-{cpuId}-{biosSerial}-{diskSerial}";
+            // SID do usuário Windows
+            try
+            {
+                sidStr = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value ?? "";
+            }
+            catch { }
+
+            var raw = $"{motherboardSerial}-{cpuId}-{biosSerial}-{diskSerial}-{sidStr}";
             return Sha256Hex(raw).ToLowerInvariant();
         }
         catch
@@ -522,19 +482,6 @@ public sealed class SpectreAuth : IDisposable
         url = url.Trim();
         while (url.EndsWith("/")) url = url.Substring(0, url.Length - 1);
         return url;
-    }
-
-    private static bool IsValidUsername(string s)
-    {
-        if (string.IsNullOrWhiteSpace(s)) return false;
-        if (s.Length < 3 || s.Length > 40) return false;
-        foreach (char c in s)
-        {
-            bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                      (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-';
-            if (!ok) return false;
-        }
-        return true;
     }
 
     private static bool IsHex64(string s)
@@ -581,7 +528,7 @@ public sealed class SpectreAuth : IDisposable
         {
             try
             {
-                Process.Start(new ProcessStartInfo("cmd.exe", $"/c start cmd /C \"color c && title SafetyAPI Error && echo {message} && timeout /t 5\"")
+                Process.Start(new ProcessStartInfo("cmd.exe", $"/c start cmd /C \"color c && title SpectreAuth Error && echo {message} && timeout /t 5\"")
                 {
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
