@@ -724,10 +724,17 @@ export async function uploadFile(
   formData.append("file", file);
   if (name) formData.append("name", name);
 
+  const csrfToken = getStoredAdminCsrf();
+  const ownerToken = getStoredOwnerToken();
+
   const response = await fetch(`${API_BASE_URL}/v1/admin/files/upload`, {
     method: "POST",
     body: formData,
     credentials: "include",
+    headers: {
+      ...(ownerToken && { Authorization: `Bearer ${ownerToken}` }),
+      ...(csrfToken && { "x-admin-csrf": csrfToken }),
+    },
   });
 
   const text = await response.text();
