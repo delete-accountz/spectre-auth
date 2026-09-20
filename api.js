@@ -3134,6 +3134,7 @@ app.get('/v1/files/:name', async (req, res) => {
     }
 
     return ok(res, req, 'OK', {
+      id: String(f._id),
       name: f.name,
       filename: f.filename,
       extension: f.extension,
