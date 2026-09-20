@@ -674,6 +674,105 @@ export async function deleteProduct(
   });
 }
 
+// Stored Files
+export interface StoredFileItem {
+  id: string;
+  name: string;
+  filename: string;
+  extension: string;
+  size: number;
+  version: string;
+  hash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FilesResponse {
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+  items: StoredFileItem[];
+}
+
+export interface FileUploadResponse {
+  id: string;
+  name: string;
+  filename: string;
+  extension: string;
+  size: number;
+  version: string;
+  hash: string;
+}
+
+export async function getFiles(
+  page = 1,
+  limit = 25,
+  options?: { q?: string; ext?: string }
+): Promise<ApiResponse<FilesResponse>> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (options?.q) params.append("q", options.q);
+  if (options?.ext) params.append("ext", options.ext);
+  return apiRequest<FilesResponse>(`/v1/files?${params}`);
+}
+
+export async function uploadFile(
+  file: File,
+  name?: string
+): Promise<ApiResponse<FileUploadResponse>> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (name) formData.append("name", name);
+
+  const response = await fetch(`${API_BASE_URL}/v1/admin/files/upload`, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+  });
+
+  const text = await response.text();
+  try {
+    const data = text ? JSON.parse(text) : { success: response.ok, message: response.statusText };
+    if (typeof data.success !== "boolean") data.success = response.ok;
+    return data;
+  } catch {
+    return { success: false, message: text || "Invalid response", error: { code: "INVALID_RESPONSE" } };
+  }
+}
+
+export async function updateFile(
+  id: string,
+  file?: File,
+  name?: string
+): Promise<ApiResponse<StoredFileItem | { id: string; name: string }>> {
+  const formData = new FormData();
+  if (file) formData.append("file", file);
+  if (name) formData.append("name", name);
+
+  const response = await fetch(`${API_BASE_URL}/v1/admin/files/${id}`, {
+    method: "PUT",
+    body: formData,
+    credentials: "include",
+  });
+
+  const text = await response.text();
+  try {
+    const data = text ? JSON.parse(text) : { success: response.ok, message: response.statusText };
+    if (typeof data.success !== "boolean") data.success = response.ok;
+    return data;
+  } catch {
+    return { success: false, message: text || "Invalid response", error: { code: "INVALID_RESPONSE" } };
+  }
+}
+
+export async function deleteFile(
+  id: string
+): Promise<ApiResponse<{ id: string }>> {
+  return apiRequest<{ id: string }>(`/v1/admin/files/${id}`, {
+    method: "DELETE",
+  });
+}
+
 // Keys List
 export async function getKeys(
   page = 1,

@@ -15,6 +15,7 @@ import {
   XMarkIcon,
   ArrowRightOnRectangleIcon,
   ShieldCheckIcon,
+  DocumentDuplicateIcon,
 } from "@heroicons/react/24/solid";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,11 @@ const navigation = [
     name: "Acoes em Massa",
     href: "/dashboard/bulk-actions",
     icon: RectangleStackIcon,
+  },
+  {
+    name: "Arquivos",
+    href: "/dashboard/files",
+    icon: DocumentDuplicateIcon,
   },
   {
     name: "Logs",

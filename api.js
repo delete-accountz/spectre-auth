@@ -8,6 +8,7 @@ const cors = require("cors");
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
+const fileUpload = require('express-fileupload');
 
 const Key = require('./database/models/Key');
 const Product = require('./database/models/Product');
@@ -23,6 +24,7 @@ const PortalSession = require("./database/models/PortalSession");
 const Order = require("./database/models/Order");
 const AdminUser = require('./database/models/AdminUser');
 const AdminSession = require('./database/models/AdminSession');
+const StoredFile = require('./database/models/StoredFile');
 
 const logger = require('./utils/logger');
 const { keyFormat } = require('./config');
@@ -34,9 +36,14 @@ const USERNAME_REGEX = /^[a-zA-Z0-9_.\-]{3,40}$/;
 const DISCORD_ID_REGEX = /^\d{17,19}$/;
 
 const dllPath = path.join(__dirname, 'dlls');
+const filesPath = process.env.FILE_STORAGE_PATH || path.join(__dirname, 'stored_files');
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 if (!fs.existsSync(dllPath)) {
   fs.mkdirSync(dllPath);
+}
+if (!fs.existsSync(filesPath)) {
+  fs.mkdirSync(filesPath, { recursive: true });
 }
 
 // =====================
@@ -1255,6 +1262,7 @@ app.use(
   app.use(attachCensorMode);
   app.use(helmet());
   app.use(express.json({ limit: '10kb', strict: true }));
+  app.use(fileUpload({ limits: { fileSize: MAX_FILE_SIZE }, abortOnLimit: true }));
   app.use(makeQueryWritable); 
   app.use(mongoSanitize({ replaceWith: '_' }));
   app.use(hpp());
@@ -2983,6 +2991,303 @@ app.delete('/v1/client/configs/:id', requireClientAccess, requireActiveClient, a
       level: 'WARN', event: 'CLIENT_CONFIG_DELETE', req, statusCode: 200,
       message: 'Client deleted config',
       meta: { usernameMasked: mask(username, 2, 0), configId: id },
+    });
+
+    return ok(res, req, 'Deleted', { id });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+// =====================
+// STORED FILES (Admin + Client)
+// =====================
+
+const fileUploadLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => getClientIp(req),
+});
+
+function safeFileName(name) {
+  return String(name || '').trim().replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 100);
+}
+
+function computeFileHash(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+app.get('/v1/files', requireAdminToken, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const skip = (page - 1) * limit;
+
+    const q = cleanStr(req.query.q, 64);
+    const ext = cleanStr(req.query.ext, 10);
+    const filter = {};
+    if (ext && ['dll', 'exe'].includes(ext.toLowerCase())) filter.extension = ext.toLowerCase();
+    if (q) {
+      const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [{ name: rx }, { filename: rx }];
+    }
+
+    const [items, total] = await Promise.all([
+      StoredFile.find(filter).sort({ updatedAt: -1 }).skip(skip).limit(limit).lean(),
+      StoredFile.countDocuments(filter),
+    ]);
+
+    const mapped = items.map(f => ({
+      id: String(f._id),
+      name: f.name,
+      filename: f.filename,
+      extension: f.extension,
+      size: f.size,
+      version: f.version,
+      hash: f.hash,
+      createdAt: f.createdAt,
+      updatedAt: f.updatedAt,
+    }));
+
+    return ok(res, req, 'OK', { page, limit, total, pages: Math.ceil(total / limit), items: mapped });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.get('/v1/files/list', async (req, res) => {
+  try {
+    const items = await StoredFile.find({}).sort({ name: 1 }).lean();
+    const mapped = items.map(f => ({
+      name: f.name,
+      filename: f.filename,
+      extension: f.extension,
+      size: f.size,
+      version: f.version,
+      hash: f.hash,
+      updatedAt: f.updatedAt,
+    }));
+    return ok(res, req, 'OK', { items: mapped });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.get('/v1/files/:id/info', requireAdminToken, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isHex24(id)) return fail(res, req, 400, 'Invalid id', 'BAD_REQUEST');
+
+    const f = await StoredFile.findById(id).lean();
+    if (!f) return fail(res, req, 404, 'Not found', 'NOT_FOUND');
+
+    return ok(res, req, 'OK', {
+      item: {
+        id: String(f._id),
+        name: f.name,
+        filename: f.filename,
+        extension: f.extension,
+        size: f.size,
+        version: f.version,
+        hash: f.hash,
+        createdAt: f.createdAt,
+        updatedAt: f.updatedAt,
+      }
+    });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.get('/v1/files/:id/download', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isHex24(id)) return fail(res, req, 400, 'Invalid id', 'BAD_REQUEST');
+
+    const f = await StoredFile.findById(id).lean();
+    if (!f) return fail(res, req, 404, 'Not found', 'NOT_FOUND');
+
+    const filePath = path.join(filesPath, f.filename);
+    if (!fs.existsSync(filePath)) {
+      return fail(res, req, 404, 'File not found on disk', 'NOT_FOUND');
+    }
+
+    return res.download(filePath, f.filename);
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.get('/v1/files/:name', async (req, res) => {
+  try {
+    const name = safeFileName(req.params.name);
+    if (!name) return fail(res, req, 400, 'Invalid name', 'BAD_REQUEST');
+
+    const f = await StoredFile.findOne({ name, extension: { $in: ['dll', 'exe'] } }).sort({ updatedAt: -1 }).lean();
+    if (!f) return fail(res, req, 404, 'Not found', 'NOT_FOUND');
+
+    const filePath = path.join(filesPath, f.filename);
+    if (!fs.existsSync(filePath)) {
+      return fail(res, req, 404, 'File not found on disk', 'NOT_FOUND');
+    }
+
+    return ok(res, req, 'OK', {
+      name: f.name,
+      filename: f.filename,
+      extension: f.extension,
+      size: f.size,
+      version: f.version,
+      hash: f.hash,
+      updatedAt: f.updatedAt,
+    });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.post('/v1/admin/files/upload', requireAdminToken, fileUploadLimiter, async (req, res) => {
+  try {
+    if (!req.files || !req.files.file) {
+      return fail(res, req, 400, 'No file uploaded', 'BAD_REQUEST');
+    }
+
+    const file = req.files.file;
+    const ext = path.extname(file.name).toLowerCase().slice(1);
+    if (!['dll', 'exe'].includes(ext)) {
+      return fail(res, req, 400, 'Only .dll and .exe files are allowed', 'BAD_REQUEST');
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      return fail(res, req, 400, 'File too large (max 50MB)', 'BAD_REQUEST');
+    }
+
+    const name = safeFileName(path.basename(file.name, '.' + ext)) || 'unnamed';
+    const filename = `${name}_${Date.now()}.${ext}`;
+    const filePath = path.join(filesPath, filename);
+
+    await file.mv(filePath);
+
+    const hash = computeFileHash(fs.readFileSync(filePath));
+
+    const doc = await StoredFile.create({
+      name,
+      filename,
+      extension: ext,
+      size: file.size,
+      version: '1',
+      hash,
+      uploadedBy: getSessionAdminId(req) || null,
+    });
+
+    audit({
+      level: 'INFO', event: 'ADMIN_FILE_UPLOAD', req, statusCode: 200,
+      message: 'File uploaded', meta: { fileId: String(doc._id), name, extension: ext, size: file.size },
+    });
+
+    return ok(res, req, 'Uploaded', {
+      id: String(doc._id),
+      name,
+      filename,
+      extension: ext,
+      size: file.size,
+      version: doc.version,
+      hash,
+    });
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.put('/v1/admin/files/:id', requireAdminToken, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isHex24(id)) return fail(res, req, 400, 'Invalid id', 'BAD_REQUEST');
+
+    const existing = await StoredFile.findById(id);
+    if (!existing) return fail(res, req, 404, 'Not found', 'NOT_FOUND');
+
+    // Handle file replacement
+    if (req.files && req.files.file) {
+      const file = req.files.file;
+      const ext = path.extname(file.name).toLowerCase().slice(1);
+      if (!['dll', 'exe'].includes(ext)) {
+        return fail(res, req, 400, 'Only .dll and .exe files are allowed', 'BAD_REQUEST');
+      }
+      if (file.size > MAX_FILE_SIZE) {
+        return fail(res, req, 400, 'File too large (max 50MB)', 'BAD_REQUEST');
+      }
+
+      // Delete old file
+      const oldPath = path.join(filesPath, existing.filename);
+      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+
+      // Save new file
+      const filename = `${existing.name}_${Date.now()}.${ext}`;
+      const filePath = path.join(filesPath, filename);
+      await file.mv(filePath);
+
+      const hash = computeFileHash(fs.readFileSync(filePath));
+
+      // Parse version, default to 1 and increment
+      const oldVersion = parseInt(existing.version, 10) || 0;
+      const newVersion = String(oldVersion + 1);
+
+      existing.filename = filename;
+      existing.extension = ext;
+      existing.size = file.size;
+      existing.version = newVersion;
+      existing.hash = hash;
+      await existing.save();
+
+      audit({
+        level: 'WARN', event: 'ADMIN_FILE_REPLACE', req, statusCode: 200,
+        message: 'File replaced', meta: { fileId: id, name: existing.name, oldVersion, newVersion },
+      });
+
+      return ok(res, req, 'Updated', {
+        id: String(existing._id),
+        name: existing.name,
+        filename: existing.filename,
+        extension: existing.extension,
+        size: existing.size,
+        version: existing.version,
+        hash: existing.hash,
+      });
+    }
+
+    // Handle name update only
+    const newName = cleanStr(req.body?.name, 80);
+    if (newName && newName !== existing.name) {
+      existing.name = newName;
+      await existing.save();
+      return ok(res, req, 'Updated', { id, name: newName });
+    }
+
+    return fail(res, req, 400, 'No changes', 'BAD_REQUEST');
+  } catch (e) {
+    return fail(res, req, 500, 'Internal server error', 'INTERNAL');
+  }
+});
+
+app.delete('/v1/admin/files/:id', requireAdminToken, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!isHex24(id)) return fail(res, req, 400, 'Invalid id', 'BAD_REQUEST');
+
+    const f = await StoredFile.findById(id);
+    if (!f) return fail(res, req, 404, 'Not found', 'NOT_FOUND');
+
+    const filePath = path.join(filesPath, f.filename);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+    const fileName = f.name;
+    await StoredFile.deleteOne({ _id: id });
+
+    audit({
+      level: 'WARN', event: 'ADMIN_FILE_DELETE', req, statusCode: 200,
+      message: 'File deleted', meta: { fileId: id, name: fileName },
     });
 
     return ok(res, req, 'Deleted', { id });
